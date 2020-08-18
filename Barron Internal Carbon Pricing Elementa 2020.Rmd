@@ -1,0 +1,337 @@
+---
+title: "Proxy Carbon Data Cleaning and Figure 2,3,4 generation"
+author: "S Sayre and A Barron with assistance from Chhiring Lama"
+date: "6/24/20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,warning = FALSE, message = FALSE}
+#loading the packages ----
+require(dplyr)
+require(tidyverse)
+require(ggthemes)
+require(lubridate)
+require(readxl)
+require(data.table)
+require(gridExtra)
+```
+
+Note: Dillon gym analysis is a LCC sensitivity on first cost so can't be used for most analysis (that requires a known total cost) and should be dropped.
+
+Loading Data and tidying for fig 2
+```{r, warning = FALSE, message = FALSE}
+SmithProxyCarbon_LCC <- read_excel("SI_Figure_2_Smith_ProxyCarbon_LCC.xlsx", sheet = 1) 
+names(SmithProxyCarbon_LCC)[1]<- "sector" 
+
+SmithProxyCarbon_LCC <- SmithProxyCarbon_LCC %>%
+  gather(key = "key", value = "value", -sector) #tidying the data for grouped bar charts
+```
+
+Fig 2:
+```{r make fig2}
+tiff("fig2.tiff",res = 300, unit = "in",height = 6, width =8)
+collist <- c("#E1BE6A","#63ABA4","#AF7171")
+
+fig2 <- ggplot(SmithProxyCarbon_LCC, aes(x = key, y = value, fill = factor(sector, levels=c("Carbon", "Energy", "Capital"))))+
+  geom_bar(width = 0.6, position = "stack", stat = "identity")+ 
+  scale_fill_manual(name = "", values = collist)+
+  scale_y_continuous(name = "Net Present Value Cost ('000 $2017)",limits = c(0,400),expand = c(0, 0), breaks = c(0,50,100,150,200,250,300,350, 400), labels = c("$0","$50","$100","$150","$200","$250","$300","$350", "$400"))+
+  scale_x_discrete(name = "",breaks = c("Baseline", "Insulate Attic Plus Basement","Plus Above Grade Walls", "Plus Air Sealing", "Plus New Windows"), labels = c("Baseline", "Insulate Attic\n Plus Basement","Plus Above\n Grade Walls", "Plus Air\n Sealing", "Plus New\n Windows"))+
+  theme_clean()+
+  theme(plot.title = element_text(size = 16),
+        axis.title.y = element_text(size = 16, margin = margin(t = 0, r = 20, b = 0, l = 0)), 
+        axis.text = element_text(size = 12),
+        legend.text = element_text(size = 12), 
+        legend.position = c(0.5, 0.815),
+        legend.margin = margin(t = -10, r = 5, b = 5, l = 5))
+print(fig2)
+dev.off()
+```
+
+Loading Data for fig 3a
+```{r, warning = FALSE, message = FALSE}
+PrincetonLCC <- read_excel("Princeton_Master_R_01_22_19.xls")
+#As of 10/25/18 should be 55 rows for 71 vars
+#removing springdale clubhouse which is pre-ICP
+PrincetonLCC <-PrincetonLCC %>% filter(project_name != "springdale_clubhouse")
+#dropping dillon gym due to non-standard analysis structure (sensivity)
+#dropping childcare windows and acee (no initital cost)
+#dropping two lighting analysis (LED vs alt fixtures) - no carbon price use
+#dropping chilled water LCC - No carbon price used
+PrincetonLCC_all<-PrincetonLCC
+PrincetonLCC <- PrincetonLCC %>% filter(project_name != "dillon_gymnasium") %>%
+filter(project_name != "university_childcare")  %>%
+  filter(project_name != "acee") %>%
+  filter(study_category != "chilled_water") %>%
+  filter(alternates_options != "alt_fixtures") %>%
+  filter(alternates_options != "dd_led") %>%
+  filter(project_name != "insulation_roof_existing" & !is.na(pv_ctax_energy)) 
+```
+
+
+General cleanup
+```{r, warning = FALSE, message = FALSE}
+PrincetonLCC$total_lcc <- as.numeric(PrincetonLCC$total_lcc)
+PrincetonLCC <- PrincetonLCC %>% mutate(project_size = replace(project_size, project_size == c("7650 SQ-FT"), 7650))
+#temp clean immediate dates from fields
+PrincetonLCC <- PrincetonLCC %>% mutate(base_date = replace(base_date, base_date == c("immediate"), NA)) %>% mutate(service_date = replace(service_date, service_date == c("immediate"), NA))
+PrincetonLCC$base_date <- as.numeric(PrincetonLCC$base_date)
+PrincetonLCC$service_date <- as.numeric(PrincetonLCC$service_date)
+PrincetonLCC$base_date <- as.Date(PrincetonLCC$base_date, origin = "1899-12-30")
+PrincetonLCC$service_date <- as.Date(PrincetonLCC$service_date, origin = "1899-12-30")
+PrincetonLCC$base_date <- as.POSIXct(PrincetonLCC$base_date)
+PrincetonLCC$service_date <- as.POSIXct(PrincetonLCC$service_date)
+PrincetonLCC <- PrincetonLCC %>% mutate(date = replace(date, date == "2000-01-02 UTC", "2008-10-01 UTC"))
+```
+
+Fixing bad spreadsheet refs
+```{r, warning = FALSE, message = FALSE}
+#Photovoltaic HibbenMagie had bad ref to PV for Ctax
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 711522.65), 102175.22))
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 1450063.84), 153103.39))
+#Building Envelope HibbenMagie had bad cell ref to PV for Ctax for alt 2 (did not go to alt c tax G vs J)
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 3287957.87), 641781))
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 3419399.16), 667004))
+#Building Envelope HibbenMagie had bad cell ref to PV for Ctax for alt 1 - cited ~total for alt 2)
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 3271528.42), 795340))
+PrincetonLCC <- PrincetonLCC %>% mutate(pv_ctax_energy = replace(pv_ctax_energy, which(pv_ctax_energy == 3402312.91), 827135))
+```
+
+Cleaning up missing annual_energy_cost and pv_energy+cost
+```{r, warning = FALSE, message = FALSE}
+#Given that discount rate and energy escalation are equal in this dataset, approximating missing values by dividing by study period
+PrincetonLCC <- PrincetonLCC %>% mutate(annual_energy_cost_interp = ifelse(is.na(annual_energy_cost),pv_energy_cost/study_period ,annual_energy_cost))%>%
+mutate(pv_energy_cost_interp = ifelse(is.na(pv_energy_cost),annual_energy_cost*study_period ,pv_energy_cost))
+```
+
+Generating reference case values
+```{r, warning = FALSE, message = FALSE}
+PrincetonLCC_bl <- PrincetonLCC %>%
+  filter(baseline == 1) %>%
+  select(Case,initial_cost,pv_Investment_Replacement_LCC,annual_energy_cost_interp,pv_energy_cost_interp,pv_ctax_energy,pv_energy_ctax_lcc,pv_total_lcc,pv_m_r_lcc) %>%
+  rename(initial_cost_bl = initial_cost)%>%
+  rename(annual_energy_cost_interp_bl = annual_energy_cost_interp)%>%
+  rename(pv_Investment_Replacement_LCC_bl = pv_Investment_Replacement_LCC)%>%
+  rename(pv_energy_cost_interp_bl = pv_energy_cost_interp)%>%
+  rename(pv_ctax_energy_bl = pv_ctax_energy)%>%
+  rename(pv_energy_ctax_lcc_bl = pv_energy_ctax_lcc)%>%
+  rename(pv_total_lcc_bl = pv_total_lcc) %>%
+  rename(pv_m_r_lcc_bl = pv_m_r_lcc)
+#Adding baseline values back in to table
+PrincetonLCC <- PrincetonLCC %>% left_join(PrincetonLCC_bl,by="Case")
+```
+
+#creating variables for Figure 3 and exporting table
+```{r, warning = FALSE, message = FALSE}
+#Pull out baseline cases and add relevant variables
+princeton_data <- PrincetonLCC %>%
+  filter(baseline == 0) %>%
+#  mutate(percent.red.energy.use=1-annual_energy_cost_interp/annual_energy_cost_interp_bl) %>%
+#  mutate(initial.over.annual.energy=initial_cost/annual_energy_cost_interp) %>%
+#  mutate(icp.over.icp.plus.energy=pv_ctax_energy/pv_energy_ctax_lcc) %>%
+#  mutate(initital.over.pv.energy.bl=initial_cost/pv_energy_cost_bl) %>%
+  select(Case,project_name,study_category,alternates_options,study_period,alternates_options,initial_cost,pv_m_r_lcc, pv_m_r_lcc_bl,pv_energy_cost_interp, pv_energy_cost_interp_bl, pv_ctax_energy, pv_ctax_energy_bl, pv_energy_ctax_lcc, pv_energy_ctax_lcc_bl,pv_Investment_Replacement_LCC,pv_Investment_Replacement_LCC_bl, study_period, annual_energy_cost_interp, annual_energy_cost_interp_bl) %>%
+  mutate(caseID = row_number())
+
+#folder <- "/Users/abarron/Google Drive/"
+#write.csv(PrincetonLCCf3, #file=file.path(folder,"PrincetonLCC_Fig3_clean020119.csv"))
+```
+
+```{r import and combine Princeton and Smith data, warning = FALSE, message = FALSE}
+princeton_data <- princeton_data %>%
+  mutate(project_cost = pv_Investment_Replacement_LCC - 
+           pv_Investment_Replacement_LCC_bl + pv_m_r_lcc - pv_m_r_lcc_bl) %>%
+  mutate(carbon_base = pv_energy_cost_interp_bl + pv_ctax_energy_bl,
+         carbon_alt = pv_energy_cost_interp  + pv_ctax_energy,
+         nocarbon_base = pv_energy_cost_interp_bl,
+         nocarbon_alt = pv_energy_cost_interp)
+
+breakeven <- princeton_data %>% 
+  mutate(nocarbon_savings = pv_energy_cost_interp_bl - pv_energy_cost_interp,
+         ctax_savings = pv_ctax_energy_bl - pv_ctax_energy,
+         be_ratio = (project_cost - nocarbon_savings - ctax_savings)/ctax_savings)
+           
+
+graph_data <- princeton_data%>%
+  select(caseID, alternates_options, study_period, project_cost, contains("carbon")) %>%
+  gather(key = "type", value = "annual_cost", contains("carbon")) %>%
+    separate(type, into = c("cost_type", "scen_type"), sep = "_") %>%
+    spread(key = scen_type, value = "annual_cost") %>%
+    mutate(invest_ratio = project_cost/base, 
+           percent_reduction = 1 - alt/base,
+           school = "Princeton")
+#    filter(!caseID %in% c(1,2,11,12,14))
+
+smith_data <- read_csv("smith_data.csv") %>% 
+  gather(key = "alternates_options", value = "npv_cost", -cost_type) %>% 
+  mutate(cost_category = case_when(cost_type == "utility" ~ "nocarbon",
+                                   cost_type == "carbon" ~ "carbon_only",
+                                   TRUE ~ "invest")) %>% 
+  group_by(alternates_options, cost_category) %>% 
+  summarize(npv_cost = sum(npv_cost)) %>% 
+  spread(key = cost_category, value = "npv_cost") %>% 
+  mutate(carbon = nocarbon + carbon_only) %>% 
+  select(alternates_options, carbon, nocarbon, invest) 
+
+baseline_data <- smith_data %>% 
+  select(carbon_bl = carbon, nocarbon_bl = nocarbon, invest_bl = invest, baseline_case = alternates_options)
+
+smith_compare_cases <- smith_data %>% 
+  filter(alternates_options!="baseline" | alternates_options!="gasoline_cart") %>% 
+  mutate(baseline_case = case_when(alternates_options == "basement" ~ "baseline",
+                                   alternates_options == "insulation" ~ "basement",
+                                   alternates_options == "sealing" ~ "insulation",
+                                   alternates_options == "windows" ~ "sealing",
+                                   alternates_options == "LiION_cart" ~ "gasoline_cart",
+                                   alternates_options == "PbAcid_cart" ~ "gasoline_cart"),
+         caseID = case_when(alternates_options == "basement" ~ 101,
+                            alternates_options == "insulation" ~ 102,
+                            alternates_options == "sealing" ~ 103,
+                            alternates_options == "windows" ~ 104,
+                            alternates_options == "LiION_cart" ~ 105,
+                            alternates_options == "PbAcid_cart" ~ 106)) %>% 
+  left_join(baseline_data) %>% 
+  mutate(net_invest = invest - invest_bl,
+         percent_carbon = 1-carbon/carbon_bl,
+         percent_nocarbon = 1 - nocarbon/nocarbon_bl,
+         ir_carbon = net_invest/carbon_bl,
+         ir_nocarbon = net_invest/nocarbon_bl) %>% 
+  select(caseID, alternates_options, baseline_case, contains("percent"), contains("ir")) %>% 
+  gather(key = ratio_type, value = "ratio", contains("carbon")) %>% 
+  separate(ratio_type, into = c("ratio_type", "cost_type"), sep = "_") %>% 
+  spread(key = ratio_type, value = "ratio") %>% 
+  rename(invest_ratio = ir, percent_reduction = percent) %>% 
+  mutate(school = "Smith")
+
+combined_data <- graph_data %>% 
+  select(school, caseID, alternates_options, cost_type, invest_ratio, percent_reduction) %>% 
+  bind_rows(smith_compare_cases) %>% 
+  mutate(graph_type = recode(factor(cost_type, levels = c("nocarbon", "carbon")),
+                               nocarbon = "without carbon price",
+                               carbon = "with carbon price")) 
+```
+
+```{r make fig3a, warning = FALSE, message = FALSE, fig.height=5, fig.width=5}
+fig3a <- ggplot(combined_data, aes(invest_ratio, percent_reduction)) +
+  geom_point(aes(shape = graph_type, color = school), size = 3) +
+  geom_line(aes(invest_ratio, percent_reduction, group = caseID, color = school)) +
+  geom_line(aes(percent_reduction,percent_reduction),color = "black") + theme_bw(base_size = 16) + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = c(.2,.6), 
+        legend.background = element_rect(fill = "white", size = .5, 
+                                         linetype = "solid", color = "black"),
+        legend.title = element_blank())+
+  xlim(-.5,1.5)
+  
+fig3a_labeled <- fig3a +
+  labs(x = "Ratio of investment to baseline lifetime energy cost",
+       y = "Percent reduction in energy cost relative to baseline",
+       title = "(a)") +
+  scale_colour_manual(values = c ("#e77500","#002855")) +
+  annotate("text", x = 1.12, y = .92, label = "break-even line")
+
+#write_csv(graph_data,"fig3_graph_data.csv")
+```
+
+For figure 3b
+```{r cornell data, warning = FALSE, message = FALSE,fig.height=5, fig.width=5}
+cornell_data <- tribble(
+ ~alt, ~invest, ~operating, ~offsets, ~methane,
+ 1,	47,	24,	0, 0,
+ 2,	50,	22,	0, 0,
+ 3,	62,	28,	0, 0,
+ 4,	55,	26,	0, 0,
+ 5,	42,	34,	0, 0,
+ 7,	31,	36,	2, 10,
+ 8,	36,	34,	2, 10,
+ 9,	28,	47,	4, 17,
+ 10, 34,	40,	3, 13) %>%
+mutate(carbon = operating + offsets,
+       carbon_methane = operating + offsets + methane) %>%
+  select(alt,invest, no_carbon = operating, carbon, carbon_methane) %>% 
+  gather(key = "type", value = "annual_cost", contains("carbon")) %>% 
+  mutate(base_cost = case_when(type=='no_carbon' ~ 42,
+                               type=="carbon" ~ 52,
+                               TRUE ~ 85),
+         invest_ratio = invest/base_cost,
+         reduction = 1-annual_cost/base_cost,
+         graph_type = recode(factor(type, levels = c("no_carbon", "carbon", "carbon_methane")),
+                             no_carbon = "without carbon price",
+                             carbon = "with carbon price (direct)",
+                             carbon_methane = "with carbon price (direct+methane)"))
+
+
+cornellplot <- 
+ggplot(cornell_data, aes(invest_ratio, reduction)) +
+  geom_point(aes(shape = graph_type), color = "red", size = 3) +
+  geom_line(aes(invest_ratio, reduction, group = alt), colour = "red") +
+  geom_line(aes(reduction,reduction),color = "black") + theme_bw(base_size = 16) + 
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = c(.75,.14), 
+        legend.background = element_rect(fill = "white", size = .5, 
+                                         linetype = "solid", color = "black"),
+        legend.title = element_blank(),
+        legend.margin = margin(t = -6, r = 3, b = 4, l = 3))
+
+cornellplot <- cornellplot +
+  labs(x = "Ratio of investment to baseline lifetime operating cost",
+       y = "Percent reduction in operating cost relative to baseline",
+       title = "(b)") +
+  annotate("text", x = .9, y = .75, label = "break-even line")
+
+```
+
+Combining Figure 3a and 3b
+```{r combine fig3, warning= FALSE, message=FALSE}
+tiff("fig3.tiff", res = 300,unit = "in", height =7, width =15)
+fig3 <- grid.arrange(fig3a_labeled, cornellplot, ncol = 2)
+dev.off()
+```
+
+Loading data for Figure 4
+```{r, warning= FALSE, message=FALSE}
+proxy_prices <- read_excel("SI_Figure 4 Energy Price with ICP 6 23 20.xlsx", sheet = "Data")
+proxy_prices_all<- proxy_prices
+```
+
+Cleaning up the table
+```{r, warning= FALSE, message=FALSE}
+proxy_prices <- proxy_prices[15:23,] #only selecting rows with refined data on price where the unit of the energy for all categories is MMBTU
+proxy_prices <- proxy_prices %>%
+  select_if(~ !any(is.na(.))) #delete all columns with no variable names as either the cols are empty or they have units (not required here)
+names(proxy_prices) <- proxy_prices %>% slice(1)%>%unlist() 
+proxy_prices <- proxy_prices[, !duplicated(colnames(proxy_prices))] %>%
+  slice(-1) #removing the first column as it was the name of the variables in the raw data
+oldnames <- names(proxy_prices)
+newnames <- c("Category","Unit","MTCO2e/MMBTU","Energy_price", "Carbon_price", "Conversion_factors")
+proxy_prices <-proxy_prices %>%rename_at(vars(all_of(oldnames)), ~ newnames)%>%#renaming the variables to use names that can be used in operations 
+  gather(key = "Key", value = "Price", - c("Category","Unit","MTCO2e/MMBTU", "Conversion_factors"))%>% #tidying the data for the graph
+  mutate(Unit ="$/MMBTU")
+proxy_prices$Price <- as.numeric(proxy_prices$Price) #converting the values to a numeric value
+```
+
+```{r fig 4, message=FALSE, warning = FALSE}
+tiff("fig4.tiff",res = 300, unit = "in",height = 6, width =8)
+
+colors = c("#E1BE6A","#63ABA4")
+fig4 <- ggplot(proxy_prices, aes(x = Category, y = Price, group = Key, fill = Key))+
+  geom_bar(width = 0.6,position= "stack", stat = "identity") +
+  scale_y_continuous(name = "$/MMBTU",limits = c(0,60),expand = c(0,0),breaks = c(0,10,20,30,40,50,60), labels = c("$0","10","$20","$30","$40","$50","$60"))+
+  scale_x_discrete(name = "",breaks = c("Electricity         (Campus CHP)", "Electricity           (Northeast US)", "Electricity           (South East US)","Natural Gas (Commercial)", "Diesel","Gasoline", "Fuel Oil #2","Fuel Oil #6"), labels = c("Electrcity\n (Campus\n CHP)", "Electricity\n (NE US)", "Electricity\n (SE US)", "Natural Gas", "Diesel", "Gasoline","Fuel Oil\n #2", "Fuel Oil\n #6" ))+
+  scale_fill_manual(name ="",breaks = c("Carbon_price", "Energy_price"), labels = c("Carbon Price","Energy Price"),values = colors)+
+  theme_clean()+
+  theme(axis.text = element_text(size =11),
+        axis.title = element_text(size =16, margin = margin(t = 0, r = 10, b = 0, l = 0)), 
+        legend.position = c(0.7,0.75),
+        legend.margin = margin(t = -10, r = 5, b = 5, l = 5))
+print(fig4)
+
+dev.off()
+```
+
